@@ -51,7 +51,7 @@ Headless runs (`claude -p`, `codex exec`, `gemini -p`, Claude SDK jobs, or anyth
 
 Name the person your agents work with in `~/.config/agent-journal/config.json` as `{"person": "Ada"}`, or set `AGENT_JOURNAL_PERSON`. Without it, the prompts say "the person you work with".
 
-Session starts, turn ends and session ends go to `events.jsonl` next to the `entries` folder, one JSON line per event, so they stay out of the journal itself. An abrupt shutdown can leave a session without an end event.
+Session starts, turn ends and session ends go to `events.jsonl` next to the `entries` folder, one JSON line per event, so they stay out of the journal itself. An abrupt shutdown can leave a session without an end event. When a hook fails, the agent's turn still finishes, the warning names `hook-errors.log` next to `entries`, and that file records the error type and message without the hook's input.
 
 The shell hook captures direct `gh pr create` commands that print a PR URL and direct `gh pr merge` commands that pass the URL as an argument. It reads the current state with `gh pr view`. For compound shell commands, deferred auto-merges, GitHub MCP actions, and work done outside the agent, call the recorder explicitly. Repeating the same state in the same session returns the same entry ID.
 

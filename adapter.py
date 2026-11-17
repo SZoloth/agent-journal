@@ -266,6 +266,23 @@ def record_pr(client, session, cwd, requested_url, *, expected=None, timeout=15)
     return entry
 
 
+def log_hook_error(client, error):
+    """Record why a hook failed, without the payload, and return the log path."""
+    try:
+        path = journal_dir().parent / "hook-errors.log"
+    except ValueError:
+        path = Path(journal.DEFAULT_ROOT).expanduser() / "hook-errors.log"
+    detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) and error.stderr else error
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps({"client": client, "error": type(error).__name__, "detail": str(detail)[:500],
+                                   "at": journal.datetime.now(journal.timezone.utc).isoformat(timespec="seconds")}) + "\n")
+    except OSError:
+        pass
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
@@ -282,9 +299,10 @@ def main():
         try:
             payload = json.load(sys.stdin)
             print(json.dumps(handle_hook(args.client, payload) if isinstance(payload, dict) else {}))
-        except (KeyError, IndexError, TypeError, OSError, ValueError, subprocess.SubprocessError):
+        except (KeyError, IndexError, TypeError, OSError, ValueError, subprocess.SubprocessError) as error:
             # The journal must not block an agent turn or print a private input on failure.
-            print(json.dumps({"systemMessage": "Agent journal hook could not save this event."}))
+            log = log_hook_error(args.client, error)
+            print(json.dumps({"systemMessage": f"Agent journal hook could not save this event. Details: {log}"}))
         return
     try:
         print(record_pr(args.client, args.session, args.project, args.url))
