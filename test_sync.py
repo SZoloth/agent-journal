@@ -1,51 +1,53 @@
-import base64
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
-import sync
+
+HERE = Path(__file__).resolve().parent
 
 
 class SyncTest(unittest.TestCase):
-    def test_preparation_drops_metadata_and_refuses_to_replace_review(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"AGENT_JOURNAL_DIR": directory}):
-            script = Path(sync.__file__).with_name("journal.py")
-            entry = subprocess.check_output([sys.executable, str(script), "add", "--client", "PRIVATE_CLIENT",
-                                             "--goal", "PRIVATE_GOAL"], input="A Markdown note\n", text=True).strip()
-            copy = Path(directory) / f"{entry}.md"
-            with patch("builtins.print"):
-                sync.prepare(entry, copy)
-            self.assertEqual(copy.read_text(), "A Markdown note\n")
-            with self.assertRaises(FileExistsError):
-                sync.prepare(entry, copy)
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.work = Path(temp.name)
+        self.remote = self.work / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.remote)], check=True)
+        self.root = self.work / "journal"
+        (self.root / "entries").mkdir(parents=True)
+        git = ["git", "-C", str(self.root)]
+        subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
+        # sync.py derives OWNER/REPO from a github.com URL, then asks gh about it.
+        subprocess.run([*git, "remote", "add", "origin", "https://github.com/acme/journal.git"], check=True)
+        subprocess.run([*git, "config", "url." + str(self.remote) + ".insteadOf", "https://github.com/acme/journal.git"], check=True)
+        (self.root / "entries" / ("a" * 32 + ".md")).write_text("an entry")
 
-    def test_private_target_and_readback_gate(self):
-        repo = "owner/review"
-        with tempfile.TemporaryDirectory() as directory, patch("builtins.print"):
-            path = Path(directory) / ("b" * 32 + ".md")
-            body = b"Reviewed Markdown.\n"
-            path.write_bytes(body)
-            public = {"visibility": "public", "full_name": repo}
-            private = {**public, "visibility": "private"}
-            content = {"encoding": "base64", "content": base64.b64encode(body).decode(), "html_url": "test"}
-            with patch("sync.gh_api", return_value=public) as api:
-                with self.assertRaisesRegex(ValueError, "private"):
-                    sync.publish(repo, path)
-                api.assert_called_once_with("repos/owner/review")
-            with patch("sync.gh_api", side_effect=[private, None, {}, content]) as api:
-                sync.publish(repo, path)
-                self.assertEqual(api.call_args_list[2].kwargs["payload"]["content"], content["content"])
-            with patch("sync.gh_api", side_effect=[private, content]) as api:
-                sync.publish(repo, path)
-                self.assertEqual(api.call_count, 2)
-            with patch("sync.gh_api", side_effect=[private, {**content, "content": "eA=="}]) as api:
-                with self.assertRaisesRegex(ValueError, "different content"):
-                    sync.publish(repo, path)
-                self.assertEqual(api.call_count, 2)
+    def sync(self, visibility):
+        gh = self.work / "bin" / "gh"
+        gh.parent.mkdir(exist_ok=True)
+        gh.write_text(f"#!/bin/sh\necho {visibility}\n")
+        gh.chmod(0o700)
+        env = dict(os.environ, PATH=f"{gh.parent}{os.pathsep}{os.environ['PATH']}")
+        return subprocess.run([sys.executable, str(HERE / "sync.py"), "--root", str(self.root)],
+                              env=env, capture_output=True, text=True)
+
+    def remote_log(self):
+        return subprocess.run(["git", "-C", str(self.remote), "log", "--oneline", "--all"],
+                              capture_output=True, text=True).stdout
+
+    def test_refuses_to_push_unless_github_confirms_private(self):
+        result = self.sync("PUBLIC")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing to push", result.stderr)
+        self.assertEqual(self.remote_log(), "")
+
+    def test_commits_and_pushes_to_a_private_repo(self):
+        result = self.sync("PRIVATE")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("add 1 entries", self.remote_log())
 
 
 if __name__ == "__main__":

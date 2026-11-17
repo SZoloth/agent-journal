@@ -130,15 +130,32 @@ class JournalTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.project / "relative").exists())
 
-    def test_malformed_entry_reports_clean_error(self):
-        entry = self.add()
-        path = self.root / "entries" / f"{entry}.md"
-        raw = path.read_text()
-        path.write_text(raw.replace('relates_to: null\n', ''))
+    def test_malformed_entry_is_skipped_with_a_warning(self):
+        good = self.add(body="Still readable")
+        bad = self.add()
+        path = self.root / "entries" / f"{bad}.md"
+        path.write_text(path.read_text().replace('relates_to: null\n', ''))
         result = self.command("list", check=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"invalid journal entry", result.stderr)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual([json.loads(line)["id"] for line in result.stdout.splitlines()], [good])
+        self.assertIn(b"skipping invalid journal entry", result.stderr)
         self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_questions_without_project_cover_every_project(self):
+        other = self.work / "other"
+        other.mkdir()
+        here = self.add("--kind", "question", body="Here?")
+        there = self.add("--project", str(other), "--kind", "question", body="There?")
+        self.assertEqual({record["id"] for record in self.records("questions")}, {here, there})
+
+    def test_branch_and_model_round_trip_and_old_entries_still_parse(self):
+        entry = self.add("--branch", "main", "--model", "opus", body="With context")
+        old = self.add(body="Older schema")
+        path = self.root / "entries" / f"{old}.md"
+        path.write_text(path.read_text().replace('branch: null\n', '').replace('model: null\n', ''))
+        records = {record["id"]: record for record in self.records("list")}
+        self.assertEqual((records[entry]["branch"], records[entry]["model"]), ("main", "opus"))
+        self.assertIsNone(records[old]["branch"])
 
 
 if __name__ == "__main__":

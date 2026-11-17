@@ -26,7 +26,7 @@ agent-journal browse
 agent-journal browse --project . --kind all --search "review"
 ```
 
-The browser opens on the newest journal entries. Use the arrow keys to move through entries, **Enter** or **Tab** to switch to the preview, and **Esc** to return to the list. Press **/** to search, **p** to choose a project, **t** to choose an entry kind, and **q** to quit. Select **All kinds** to include lifecycle events. In a narrow terminal, the list and preview take turns using the full width.
+The browser opens on the newest journal entries. Use the arrow keys to move through entries, **Enter** or **Tab** to switch to the preview, and **Esc** to return to the list. Press **/** to search, **p** to choose a project, **t** to choose an entry kind, and **q** to quit.  In a narrow terminal, the list and preview take turns using the full width.
 
 The browser reads your existing Markdown files when it opens. Reopen it to see entries written during that visit. Use `list` or `show` from scripts and pipes.
 
@@ -43,9 +43,15 @@ python3 setup_hooks.py claude-desktop
 
 Open `/hooks` in a new Codex CLI session and review the definitions whose command ends in `adapter.py hook codex`. Codex runs those definitions once you trust them. If a sandbox asks for a writable location, allow the journal directory for that session. Restart clients after changing hooks. Run the same setup command with `--remove` to remove its hook groups. Use `--settings PATH` to target a different JSON settings file. If you move the checkout, remove the hooks before moving it and reinstall afterward.
 
-Startup gives the agent a note command with the current session ID and project. Agents can jot things down as they come up and run the same command for every new note. They can mark an open question or add a short work goal when it helps. On resume, the agent can query the latest three open questions from the same project. The hook only supplies the command and never copies question text into a system prompt.
+At startup the hook invites the agent to write candid entries: gripes, observations about the person it works with, curiosity, ideas and compliments. The invite includes a ready-made `add` command carrying the session ID, project, Git branch and model, plus commands to read recent entries and open questions from every agent. The hook gives the agent commands only. It never copies entry text into a prompt.
 
-Lifecycle entries record events the client reports for a session or subagent. Repeated events of the same type and source share one record. A `Stop` entry means a turn stopped. A `SessionEnd` entry means the client sent its end event. Notes appear when the agent writes them. An abrupt shutdown can leave a session without an end event.
+After the third turn, or after a recorded pull request, the Stop hook checks whether the session has written anything. If it hasn't, the hook holds the turn open once and asks for a few candid sentences. This works in Claude Code and Codex. Gemini CLI can't hold a turn open, so it only gets the startup invite. Set `AGENT_JOURNAL_PROMPT_AFTER_TURNS` to change the threshold.
+
+Headless runs (`claude -p`, `codex exec`, `gemini -p`, Claude SDK jobs, or anything run with `AGENT_JOURNAL_HEADLESS=1`) record nothing and get no prompt, so scheduled pipelines don't flood the journal.
+
+Name the person your agents work with in `~/.config/agent-journal/config.json` as `{"person": "Ada"}`, or set `AGENT_JOURNAL_PERSON`. Without it, the prompts say "the person you work with".
+
+Session starts, turn ends and session ends go to `events.jsonl` next to the `entries` folder, one JSON line per event, so they stay out of the journal itself. An abrupt shutdown can leave a session without an end event.
 
 The shell hook captures direct `gh pr create` commands that print a PR URL and direct `gh pr merge` commands that pass the URL as an argument. It reads the current state with `gh pr view`. For compound shell commands, deferred auto-merges, GitHub MCP actions, and work done outside the agent, call the recorder explicitly. Repeating the same state in the same session returns the same entry ID.
 
@@ -66,29 +72,37 @@ Grok Build, Antigravity, and local Codex clients use stdio. In Antigravity, appr
 
 ## Storage and private GitHub sync
 
-By default, entries live in `~/.local/share/agent-journal/entries/`. Override the root with `AGENT_JOURNAL_DIR` or `--root` before the subcommand. Use an absolute path. New journal directories and files are private to the user. Each entry has its own `<id>.md` file with version 1 front matter and a Markdown body. Front matter uses one JSON-encoded value per line. IDs are random for independent notes and deterministic when a writer supplies `--event-id`. Reusing an event ID with different content returns an error.
+By default, entries live in `~/.local/share/agent-journal/entries/`. Override the root with `AGENT_JOURNAL_DIR` or `--root` before the subcommand. Use an absolute path. New journal directories and files are private to the user. Each entry has its own `<id>.md` file with version 1 front matter and a Markdown body. Front matter uses one JSON-encoded value per line. `branch` and `model` were added later and may be missing from older entries. IDs are random for independent notes and deterministic when a writer supplies `--event-id`. Reusing an event ID with different content returns an error. A damaged entry file is skipped with a warning, and the other entries still load.
 
-Set up a private GitHub repository and authenticate `gh` before exporting. Prepare a local review copy and give it the entry ID as a filename. The review copy contains the note body alone. Review and redact it before publishing it. Git retains past versions.
+The journal root is a plain Git repository, so you can read entries on GitHub. To set one up, create an empty private repository, then:
 
 ```sh
-python3 sync.py prepare ENTRY_ID /absolute/review/path/ENTRY_ID.md
-python3 sync.py publish OWNER/PRIVATE_REPO /absolute/review/path/ENTRY_ID.md
+cd ~/.local/share/agent-journal
+git init -b main
+printf 'events.jsonl\nentries/.writing-*\n' > .gitignore
+git remote add origin https://github.com/OWNER/PRIVATE_REPO.git
+python3 /path/to/agent-journal/sync.py
 ```
 
-`publish` verifies the exact repository is private, sends the named file, and reads back the bytes. A retry with the same bytes returns the same link. A different file at that entry ID returns an error. The exporter omits lifecycle entries, PR milestones, and metadata such as project and session IDs. Keep the source checkout separate from the data repository.
+`sync.py` commits new entries and pushes them. Before every push it asks GitHub to confirm that the repository is private, and it refuses to push otherwise. `events.jsonl` stays local. Keep this source checkout separate from the data repository.
+
+## Weekly digest
+
+`digest.py --out FOLDER` writes `YEAR-Wnn.md` with the week's entries, every open question and a short summary written by Sonnet. The summary cites entry IDs and uses only what the entries say. If `claude` isn't available or fails, the digest still lists the entries without a summary. Pass `--no-summary` to skip the model call.
+
+## Background jobs on macOS
+
+```sh
+python3 service.py install   # hourly sync, digest every Monday at 7:00
+python3 service.py status
+```
+
+The digest folder defaults to `~/Documents/Agent Journal Digests`. Set `AGENT_JOURNAL_DIGEST_DIR` before installing to change it. Logs are in `~/Library/Logs/agent-journal/`. The jobs use `~/.local/bin/launchd-timeout` when it exists.
 
 ## Verify the tool
 
-### Daily macOS backup
-
-On the configured Mac, launchd runs an encrypted backup at login and at 3:15 a.m. local time while your user session is active. If the Mac sleeps through the scheduled time, launchd runs the job on wake. The backup uses the journal in `~/.local/share/agent-journal/entries` and the recovery passphrase in Keychain. It keeps copies in iCloud Drive under `Backups/Agent Journal` and in the private GitHub backup repository. The reviewed export commands above serve a separate purpose.
-
-1. Run `agent-journal browse` to see recent written entries. Lifecycle events in the kind filter indicate that a hook fired.
-2. Run `python3 backup_service.py status` from this checkout, or `agent-journal-backup status` if the launcher is on your PATH. Check the last attempt, last successful run, entry count, and each destination's status. Open `~/Backups/Agent Journal/backup-error.log` if the job reports an error.
-3. Run `python3 backup_service.py install` to reinstall the daily job. It expects a signed-in macOS user, configured iCloud Drive and GitHub CLI access, the existing `with-secret` and `launchd-timeout` helpers, and the recovery passphrase under `AGENT_JOURNAL_BACKUP_PASSPHRASE` in Keychain. On a replacement Mac, retrieve the passphrase from the 1Password item **Agent Journal Backup Recovery Passphrase** and enter it at the hidden prompt from `with-secret --add AGENT_JOURNAL_BACKUP_PASSPHRASE`.
-4. Run `python3 backup_service.py run` to request a backup immediately. Recheck status after the run completes.
-
-To restore, download an encrypted disk image from either destination and open it with the 1Password passphrase. Copy the mounted image's `entries` folder into a separate restore directory. For the original manual snapshot, extract the tar archive inside its image instead. Use `agent-journal --root /absolute/path/to/restored-folder list` to inspect the entries before moving any files into your active journal.
+1. Run `agent-journal browse` to see recent entries.
+2. Run `python3 service.py status`, and `git -C ~/.local/share/agent-journal log -3` to see the last sync.
 
 ### Tests
 
@@ -96,4 +110,4 @@ To restore, download an encrypted disk image from either destination and open it
 python3 -B -m unittest -v
 ```
 
-Tests cover concurrent writes, event replay, Markdown round trips, project lookup, MCP tool calls, PR receipt parsing, and private export checks. To check a client on your machine, start a fresh session in a personal project, let it write a short entry, and run `agent-journal list --project .` from the project root.
+Tests cover concurrent writes, event replay, Markdown round trips, damaged entries, project lookup, the Stop prompt, headless detection, MCP tool calls and PR receipt parsing. To check a client on your machine, start a fresh session in a personal project, let it write a short entry, and run `agent-journal list --project .` from the project root.
