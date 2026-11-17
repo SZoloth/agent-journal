@@ -49,14 +49,58 @@ class AdapterTest(unittest.TestCase):
             result = self.run_script("adapter.py", "hook", client, payload=payload)
             context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
             self.assertIn(f"--client {client} --session thread-1", context)
-            self.assertIn("questions --project", context)
+            self.assertIn("questions --limit 3 --project", context)
             self.assertNotIn("PRIVATE_", context)
             for _ in range(2):
                 result = self.run_script("adapter.py", "hook", client, payload={**payload, "hook_event_name": "Stop", "source": None})
                 self.assertEqual(json.loads(result.stdout), {})
-        entries = self.entries("lifecycle")
-        self.assertEqual(len(entries), 4)
-        self.assertNotIn("PRIVATE_", json.dumps(entries))
+        self.assertEqual(self.entries("lifecycle"), [])
+        events = (self.cwd / "data" / "events.jsonl").read_text()
+        self.assertEqual(events.count('"SessionStart"'), 2)
+        self.assertEqual(events.count('"Stop"'), 4)
+        self.assertNotIn("PRIVATE_", events)
+
+    def stop(self, client="claude", session="thread-1", **extra):
+        payload = {"hook_event_name": "Stop", "session_id": session, "cwd": str(self.cwd), **extra}
+        return json.loads(self.run_script("adapter.py", "hook", client, payload=payload).stdout)
+
+    def test_stop_asks_once_for_an_entry_after_enough_turns(self):
+        self.assertEqual(self.stop(), {})
+        self.assertEqual(self.stop(), {})
+        reply = self.stop()
+        self.assertEqual(reply["decision"], "block")
+        line = next(line for line in reply["reason"].splitlines() if "journal.py add " in line)
+        self.assertIn("--session thread-1", line)
+        self.assertEqual(self.stop(), {})
+        self.assertEqual(self.stop(stop_hook_active=True), {})
+
+    def test_stop_stays_quiet_when_the_session_already_wrote(self):
+        subprocess.run([sys.executable, str(HERE / "journal.py"), "add", "--client", "claude",
+                        "--session", "thread-2", "--project", str(self.cwd)],
+                       input="A gripe", text=True, env=self.env, check=True, capture_output=True)
+        for _ in range(4):
+            self.assertEqual(self.stop(session="thread-2"), {})
+
+    def test_gemini_stop_never_blocks(self):
+        for _ in range(4):
+            self.assertEqual(self.stop(client="gemini", session="thread-3"), {})
+
+    def test_headless_runs_record_nothing(self):
+        self.env["AGENT_JOURNAL_HEADLESS"] = "1"
+        payload = {"hook_event_name": "SessionStart", "source": "startup", "session_id": "bot", "cwd": str(self.cwd)}
+        self.assertEqual(json.loads(self.run_script("adapter.py", "hook", "codex", payload=payload).stdout), {})
+        for _ in range(4):
+            self.assertEqual(self.stop(session="bot"), {})
+        self.assertFalse((self.cwd / "data" / "events.jsonl").exists())
+
+    def test_headless_command_detection(self):
+        sys.path.insert(0, str(HERE))
+        from adapter import is_headless_command
+        for args in ("claude -p hi", "/usr/local/bin/claude --print --model sonnet", "codex exec 'do it'",
+                     "zsh -c 'claude -p x'", "gemini -p hi"):
+            self.assertTrue(is_headless_command(args), args)
+        for args in ("claude", "claude --resume abc", "codex", "codex app-server", "python3 adapter.py hook codex"):
+            self.assertFalse(is_headless_command(args), args)
 
     def test_settings_install_replay_and_uninstall_preserve_other_hooks(self):
         path = self.cwd / "settings.json"
@@ -106,7 +150,7 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(self.entries("milestone"), [])
         for _ in range(2):
             result = self.run_script("adapter.py", "hook", "codex", payload=payload)
-            self.assertEqual(json.loads(result.stdout), {})
+            self.assertIn("journal.py add", json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"])
         entry, = self.entries("milestone")
         self.assertIn("pull request merged", entry["body"])
 

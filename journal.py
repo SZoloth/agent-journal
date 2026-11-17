@@ -2,11 +2,13 @@
 """Read and write a local Markdown journal."""
 
 import argparse
+import contextlib
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import fcntl
 import re
 import stat
 import subprocess
@@ -18,6 +20,9 @@ from uuid import uuid4
 KINDS = ("note", "question", "reflection", "milestone", "lifecycle")
 ENTRY_ID = re.compile(r"[0-9a-f]{32}")
 OPTIONAL_FIELDS = ("session", "goal", "event_id", "relates_to")
+# Added after schema 1 shipped; older entries omit them.
+CONTEXT_FIELDS = ("branch", "model")
+WRITTEN_KINDS = ("note", "question", "reflection")
 DEFAULT_ROOT = "~/.local/share/agent-journal"
 
 
@@ -70,13 +75,16 @@ def parse_entry(path):
             raise ValueError
         if not all(key in record and (record[key] is None or isinstance(record[key], str)) for key in OPTIONAL_FIELDS):
             raise ValueError
+        if not all(record.setdefault(key, None) is None or isinstance(record[key], str) for key in CONTEXT_FIELDS):
+            raise ValueError
         record["body"] = body.decode("utf-8")
         return record
     except ValueError:
         raise ValueError(f"invalid journal entry: {path.name}") from None
 
 
-def write_entry(directory, *, kind, client, project, body, session=None, goal=None, event_id=None, relates_to=None):
+def write_entry(directory, *, kind, client, project, body, session=None, goal=None, event_id=None, relates_to=None,
+                branch=None, model=None):
     if not client.strip():
         raise ValueError("client cannot be blank")
     if event_id is not None and not event_id.strip():
@@ -100,6 +108,8 @@ def write_entry(directory, *, kind, client, project, body, session=None, goal=No
         "goal": goal,
         "event_id": event_id,
         "relates_to": relates_to,
+        "branch": branch,
+        "model": model,
     }
     created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
     metadata = {**values, "created_at": created_at}
@@ -123,12 +133,57 @@ def write_entry(directory, *, kind, client, project, body, session=None, goal=No
 
 
 def read_entries(directory):
-    entries = (
-        parse_entry(path)
-        for path in directory.glob("*.md")
-        if ENTRY_ID.fullmatch(path.stem)
-    )
+    entries = []
+    for path in directory.glob("*.md"):
+        if not ENTRY_ID.fullmatch(path.stem):
+            continue
+        try:
+            entries.append(parse_entry(path))
+        except (OSError, ValueError) as error:
+            # One damaged file must not hide every other entry.
+            print(f"journal: skipping {error}", file=sys.stderr)
     return sorted(entries, key=lambda entry: (entry["created_at"], entry["id"]), reverse=True)
+
+
+def events_path(directory):
+    return directory.parent / "events.jsonl"
+
+
+@contextlib.contextmanager
+def locked_events(directory):
+    directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(events_path(directory), "a+", encoding="utf-8") as file:
+        fcntl.flock(file, fcntl.LOCK_EX)
+        file.seek(0)
+        yield file
+
+
+def read_events(file, tail_bytes=None):
+    """Read logged events; with tail_bytes, only the newest part of the log."""
+    events = []
+    if tail_bytes is not None:
+        size = file.seek(0, os.SEEK_END)
+        file.seek(max(0, size - tail_bytes))
+        if size > tail_bytes:
+            file.readline()  # drop the partial first line
+    for line in file:
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    return events
+
+
+def append_event(file, **event):
+    event["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    file.seek(0, os.SEEK_END)
+    file.write(json.dumps(event) + "\n")
+    file.flush()
+
+
+def log_event(directory, **event):
+    with locked_events(directory) as file:
+        append_event(file, **event)
 
 
 def positive_int(value):
@@ -150,6 +205,8 @@ def parse_args():
     add.add_argument("--kind", choices=KINDS, default="note")
     add.add_argument("--event-id")
     add.add_argument("--relates-to")
+    add.add_argument("--branch")
+    add.add_argument("--model")
     listing = commands.add_parser("list", help="list matching entries as JSON Lines")
     listing.add_argument("--project")
     listing.add_argument("--session")
@@ -162,8 +219,8 @@ def parse_args():
     browser.add_argument("--search", default="", help="open with this text search applied")
     show = commands.add_parser("show", help="print an entry as Markdown")
     show.add_argument("id")
-    questions = commands.add_parser("questions", help="list open questions for a project as JSON Lines")
-    questions.add_argument("--project", required=True)
+    questions = commands.add_parser("questions", help="list open questions as JSON Lines")
+    questions.add_argument("--project", help="limit to one project (default: every project)")
     questions.add_argument("--limit", type=positive_int, default=20)
     resolve = commands.add_parser("resolve", help="record a question's resolution")
     resolve.add_argument("id")
@@ -176,7 +233,7 @@ def run(args, directory):
         print(write_entry(
             directory, kind=args.kind, client=args.client, project=project_path(args.project),
             session=args.session, goal=args.goal, event_id=args.event_id, relates_to=args.relates_to,
-            body=body,
+            branch=args.branch, model=args.model, body=body,
         ))
         return
     if args.command == "show":
@@ -212,7 +269,7 @@ def run(args, directory):
         resolved = {entry["relates_to"] for entry in records if entry["kind"] == "resolution"}
         records = [
             entry for entry in records
-            if entry["kind"] == "question" and entry["project"] == project and entry["id"] not in resolved
+            if entry["kind"] == "question" and project in (None, entry["project"]) and entry["id"] not in resolved
         ]
     else:
         filters = {"project": project, "kind": args.kind, "session": args.session}
