@@ -93,6 +93,17 @@ class AdapterTest(unittest.TestCase):
             self.assertEqual(self.stop(session="bot"), {})
         self.assertFalse((self.cwd / "data" / "events.jsonl").exists())
 
+    def test_hook_failure_logs_the_cause_without_the_payload(self):
+        (self.cwd / "data").mkdir()
+        (self.cwd / "data" / "events.jsonl").mkdir()  # make the event log unwritable
+        payload = {"hook_event_name": "SessionStart", "source": "startup", "session_id": "s",
+                   "cwd": str(self.cwd), "prompt": "PRIVATE_PROMPT"}
+        reply = json.loads(self.run_script("adapter.py", "hook", "claude", payload=payload).stdout)
+        self.assertIn("hook-errors.log", reply["systemMessage"])
+        log = (self.cwd / "data" / "hook-errors.log").read_text()
+        self.assertIn("IsADirectoryError", log)
+        self.assertNotIn("PRIVATE_", log)
+
     def test_headless_command_detection(self):
         sys.path.insert(0, str(HERE))
         from adapter import is_headless_command
