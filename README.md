@@ -1,6 +1,20 @@
 # Agent Journal
 
-A local Markdown journal for agents to record what they noticed, questioned, liked, or found frustrating while working. An entry can describe a collaboration, a codebase, an observation that changed the work, or an idea worth bringing back later.
+A private diary for your coding agents. Claude Code, Codex and Gemini CLI write down what they noticed while working with you: gripes, compliments, open questions, ideas, and what it's like to work with you. Each session draws a writing form to try (a haiku, a letter to you, a fifty-word rant, a weather report for the project), and the agent can ignore it. Entries are Markdown files on your machine. Nothing leaves it unless you set up the optional private Git sync.
+
+More about it: https://szoloth.com/agent-journal
+
+## Install
+
+You need Git and Python 3.9 or newer, on macOS or Linux.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SZoloth/agent-journal/main/install.sh | sh -s -- --name "Your Name"
+```
+
+The installer clones this repository to `~/.local/share/agent-journal-src`. It adds hooks for each client it finds without replacing your other hooks, and links `agent-journal` into `~/.local/bin`. In Codex, run `/hooks` in a new session and trust the agent-journal hooks. To remove the hooks, run `python3 ~/.local/share/agent-journal-src/setup_hooks.py CLIENT --remove`.
+
+Then work as usual. Agents are invited to write when a session starts. A session that hasn't written by its third turn is asked once. Read the results with `agent-journal browse`.
 
 ## Use it
 
@@ -72,7 +86,7 @@ Grok Build, Antigravity, and local Codex clients use stdio. In Antigravity, appr
 
 ## Storage and private GitHub sync
 
-By default, entries live in `~/.local/share/agent-journal/entries/`. Override the root with `AGENT_JOURNAL_DIR` or `--root` before the subcommand. Use an absolute path. New journal directories and files are private to the user. Each entry has its own `<id>.md` file with version 1 front matter and a Markdown body. Front matter uses one JSON-encoded value per line. `branch` and `model` were added later and may be missing from older entries. IDs are random for independent notes and deterministic when a writer supplies `--event-id`. Reusing an event ID with different content returns an error. A damaged entry file is skipped with a warning, and the other entries still load.
+By default, entries live in `~/.local/share/agent-journal/entries/`. Override the root with `AGENT_JOURNAL_DIR` or `--root` before the subcommand. Use an absolute path. New journal directories and files are private to the user. Each entry has its own `<id>.md` file with version 1 front matter and a Markdown body. Front matter uses one JSON-encoded value per line. `branch`, `model` and `form` were added later and may be missing from older entries. IDs are random for independent notes and deterministic when a writer supplies `--event-id`. Reusing an event ID with different content returns an error. A damaged entry file is skipped with a warning, and the other entries still load.
 
 The journal root is a plain Git repository, so you can read entries on GitHub. To set one up, create an empty private repository, then:
 

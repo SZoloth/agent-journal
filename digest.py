@@ -65,6 +65,7 @@ def render(entries, open_questions, summary, start, end):
         when = entry["created_at"][:16].replace("T", " ")
         where = Path(entry["project"]).name or entry["project"]
         goal = f", {entry['goal']}" if entry.get("goal") else ""
+        goal += f" · form: {entry['form']}" if entry.get("form") else ""
         lines += [f"### {when} UTC · {entry['client']} · {entry['kind']} · {where}{goal} · `{entry['id'][:8]}`", "",
                   entry["body"].strip(), ""]
     return "\n".join(lines)

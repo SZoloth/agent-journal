@@ -104,6 +104,19 @@ class AdapterTest(unittest.TestCase):
         self.assertIn("IsADirectoryError", log)
         self.assertNotIn("PRIVATE_", log)
 
+    def test_each_session_draws_one_form_and_records_it(self):
+        payload = {"hook_event_name": "SessionStart", "source": "startup", "session_id": "thread-9", "cwd": str(self.cwd)}
+        first = json.loads(self.run_script("adapter.py", "hook", "claude", payload=payload).stdout)
+        again = json.loads(self.run_script("adapter.py", "hook", "claude", payload=payload).stdout)
+        context = first["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(context, again["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("This session's form, if you want it:", context)
+        line = next(line for line in context.splitlines() if "journal.py add " in line)
+        form = shlex.split(line)[shlex.split(line).index("--form") + 1]
+        subprocess.run(shlex.split(line), input="Dear you,", text=True, env=self.env, check=True, capture_output=True)
+        entry, = self.entries("note")
+        self.assertEqual(entry["form"], form)
+
     def test_headless_command_detection(self):
         sys.path.insert(0, str(HERE))
         from adapter import is_headless_command

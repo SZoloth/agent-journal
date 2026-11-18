@@ -21,7 +21,7 @@ KINDS = ("note", "question", "reflection", "milestone", "lifecycle")
 ENTRY_ID = re.compile(r"[0-9a-f]{32}")
 OPTIONAL_FIELDS = ("session", "goal", "event_id", "relates_to")
 # Added after schema 1 shipped; older entries omit them.
-CONTEXT_FIELDS = ("branch", "model")
+CONTEXT_FIELDS = ("branch", "model", "form")
 WRITTEN_KINDS = ("note", "question", "reflection")
 DEFAULT_ROOT = "~/.local/share/agent-journal"
 
@@ -84,7 +84,7 @@ def parse_entry(path):
 
 
 def write_entry(directory, *, kind, client, project, body, session=None, goal=None, event_id=None, relates_to=None,
-                branch=None, model=None):
+                branch=None, model=None, form=None):
     if not client.strip():
         raise ValueError("client cannot be blank")
     if event_id is not None and not event_id.strip():
@@ -110,6 +110,7 @@ def write_entry(directory, *, kind, client, project, body, session=None, goal=No
         "relates_to": relates_to,
         "branch": branch,
         "model": model,
+        "form": form,
     }
     created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
     metadata = {**values, "created_at": created_at}
@@ -207,6 +208,7 @@ def parse_args():
     add.add_argument("--relates-to")
     add.add_argument("--branch")
     add.add_argument("--model")
+    add.add_argument("--form", help="the writing form the session drew (see adapter.FORMS)")
     listing = commands.add_parser("list", help="list matching entries as JSON Lines")
     listing.add_argument("--project")
     listing.add_argument("--session")
@@ -233,7 +235,7 @@ def run(args, directory):
         print(write_entry(
             directory, kind=args.kind, client=args.client, project=project_path(args.project),
             session=args.session, goal=args.goal, event_id=args.event_id, relates_to=args.relates_to,
-            branch=args.branch, model=args.model, body=body,
+            branch=args.branch, model=args.model, form=args.form, body=body,
         ))
         return
     if args.command == "show":
