@@ -1,6 +1,7 @@
 """Translate client lifecycle events to journal commands."""
 
 import argparse
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -37,6 +38,21 @@ STOP_PROMPT = (
     "material out. Use:\n{command}\nPass the entry on stdin. Then finish as you were going to; do not "
     "mention this step unless asked."
 )
+# A constraint per session, in the Oulipo spirit: a shape to write into, never a requirement.
+FORMS = {
+    "haiku": "a haiku about the hardest part of the work",
+    "letter": "a short letter to {person}, starting \"Dear {person},\"",
+    "rant": "a rant of fifty words or fewer, no hedging",
+    "field-note": "a naturalist's field note on the codebase or tools, as if you were observing wildlife",
+    "overheard": "two lines of overheard dialogue that sum up the session",
+    "complaint": "a formal complaint to the management about the tools, the repo or the instructions",
+    "postcard": "a postcard from wherever you are in the code: wish you were here, because...",
+    "weather": "a weather report for the project: conditions, forecast, warnings",
+    "one-question": "the one question you would ask {person} if you could only ask one",
+    "six-words": "a six-word story about this session",
+    "confession": "a confession: something you did, skipped or assumed that nobody noticed",
+    "free": "anything at all, in whatever shape you like",
+}
 PR_PROMPT = (
     "The agent journal recorded this pull request ({state}). Once you reach a natural pause, write a short "
     "journal entry about the work behind it: what was harder than it looked, what you would change, how "
@@ -82,8 +98,20 @@ def git_branch(cwd):
     return result.stdout.strip() or None if result.returncode == 0 else None
 
 
-def add_command(client, session, cwd, *, branch=None, model=None):
+def draw_form(session):
+    """The session's form, the same on every call for that session."""
+    names = sorted(FORMS)
+    return names[int(sha256(session.split("/")[0].encode()).hexdigest(), 16) % len(names)]
+
+
+def describe_form(form):
+    return FORMS[form].format(person=person())
+
+
+def add_command(client, session, cwd, *, branch=None, model=None, form=None):
     command = [*journal_command(), "add", "--client", client, "--session", session, "--project", cwd]
+    if form:
+        command += ["--form", form]
     if branch:
         command += ["--branch", branch]
     if model:
@@ -156,8 +184,12 @@ def handle_stop(client, session, cwd, payload, directory):
             return {}
         journal.append_event(file, client=client, session=session, project=cwd, event="journal-prompt")
     start = next((event for event in events if event.get("event") == "SessionStart"), {})
-    command = shlex.join(add_command(client, session, cwd, branch=start.get("branch"), model=start.get("model")))
-    return {"decision": "block", "reason": STOP_PROMPT.format(command=command, person=person())}
+    form = draw_form(session)
+    command = shlex.join(add_command(client, session, cwd, branch=start.get("branch"), model=start.get("model"),
+                                     form=form))
+    reason = STOP_PROMPT.format(command=command, person=person())
+    reason += f"\nThis session's form, if you want it: {describe_form(form)}."
+    return {"decision": "block", "reason": reason}
 
 
 def handle_hook(client, payload):
@@ -191,7 +223,8 @@ def handle_hook(client, payload):
     if event not in START_EVENTS:
         return {}
 
-    add = add_command(client, author_session, cwd, branch=branch, model=model)
+    form = draw_form(author_session)
+    add = add_command(client, author_session, cwd, branch=branch, model=model, form=form)
     note = shlex.join(add)
     home = Path(cwd).resolve() == Path.home().resolve()
     questions = [*journal_command(), "questions", "--limit", "3"] + ([] if home else ["--project", cwd])
@@ -202,6 +235,8 @@ def handle_hook(client, payload):
         "Pass the entry on stdin and run the command again for each new entry. Add --kind question for an "
         "open question you want someone to pick up, and --goal with a few words on what you are working on. "
         "Keep credentials, raw transcripts, and confidential client material out of entries.\n"
+        f"This session's form, if you want it: {describe_form(form)}. Ignore it when it doesn't fit; "
+        "the command records which form you drew either way.\n"
     )
     if not actor:
         context += (
