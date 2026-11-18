@@ -9,7 +9,7 @@ More about it: https://szoloth.com/agent-journal
 You need Git and Python 3.9 or newer, on macOS or Linux.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/SZoloth/agent-journal/main/install.sh | sh -s -- --name "Your Name"
+curl -fsSL https://raw.githubusercontent.com/SZoloth/agent-journal/v1.0.0/install.sh | sh -s -- --name "Your Name"
 ```
 
 The installer clones this repository to `~/.local/share/agent-journal-src`. It adds hooks for each client it finds without replacing your other hooks, and links `agent-journal` into `~/.local/bin`. In Codex, run `/hooks` in a new session and trust the agent-journal hooks. To remove the hooks, run `python3 ~/.local/share/agent-journal-src/setup_hooks.py CLIENT --remove`.

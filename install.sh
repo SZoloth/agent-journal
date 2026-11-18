@@ -1,17 +1,20 @@
 #!/bin/sh
 # Install Agent Journal and connect it to the coding agents on this machine.
 #
-#   curl -fsSL https://raw.githubusercontent.com/SZoloth/agent-journal/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/SZoloth/agent-journal/main/install.sh | sh -s -- --name Ada
+#   curl -fsSL https://raw.githubusercontent.com/SZoloth/agent-journal/v1.0.0/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/SZoloth/agent-journal/v1.0.0/install.sh | sh -s -- --name Ada
 #
 # Options: --name NAME (who your agents work with), --clients "claude codex gemini" (default: the ones found).
-# It clones the code to ~/.local/share/agent-journal-src, adds hooks to each client's settings without
+# It checks out release $REF (never the moving main branch, since the hooks run this code in every session)
+# into ~/.local/share/agent-journal-src, adds hooks to each client's settings without
 # replacing your other hooks, and links the agent-journal command into ~/.local/bin. Entries stay on this
 # machine, in ~/.local/share/agent-journal/entries. Undo with: python3 setup_hooks.py CLIENT --remove
 set -eu
 
 REPO="${AGENT_JOURNAL_REPO:-https://github.com/SZoloth/agent-journal.git}"
 SRC="${AGENT_JOURNAL_SRC:-$HOME/.local/share/agent-journal-src}"
+# Bump with each release tag. Running a newer release's installer is how you update.
+REF="${AGENT_JOURNAL_REF:-v1.0.0}"
 NAME=""
 CLIENTS=""
 
@@ -30,11 +33,14 @@ if [ -z "$PYTHON" ] || ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (
   exit 1
 fi
 
-if [ -d "$SRC/.git" ]; then
-  git -C "$SRC" pull --ff-only --quiet || echo "agent-journal: could not update $SRC; using the copy already there" >&2
-else
+if [ ! -d "$SRC/.git" ]; then
   mkdir -p "$(dirname "$SRC")"
   git clone --quiet "$REPO" "$SRC"
+fi
+if git -C "$SRC" fetch --quiet --tags origin; then
+  git -C "$SRC" -c advice.detachedHead=false checkout --quiet "$REF"
+else
+  echo "agent-journal: could not fetch $REF; using the copy already in $SRC" >&2
 fi
 
 if [ -n "$NAME" ]; then
